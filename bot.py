@@ -20,8 +20,8 @@ ADMIN_IDS = set()
 # Проверка, что переменные окружения установлены
 if not BOT_TOKEN or not ADMIN_PASSWORD:
     logging.error("BOT_TOKEN или ADMIN_PASSWORD не установлены в переменных окружения. Бот не может быть запущен.")
-    # import sys
-    # sys.exit(1)
+    import sys
+    sys.exit(1)
 
 # Временное хранилище
 waiting_users = []
@@ -41,14 +41,11 @@ user_interests = {}
 available_interests = ["Музыка", "Игры", "Кино", "Путешествия", "Спорт", "Книги"]
 
 # Новые переменные для реферальной системы
-referrals = {}  # {referrer_id: count}
-invited_by = {} # {new_user_id: referrer_id}
+referrals = {}
+invited_by = {}
 
 # ========== ФИЛЬТРЫ ==========
 class NotAdminFilter(BaseFilter):
-    """
-    Пользовательский фильтр, который пропускает сообщения только от НЕ-админов.
-    """
     def filter(self, message):
         return message.from_user.id not in ADMIN_IDS
 
@@ -61,7 +58,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Вы заблокированы и не можете использовать бота.")
         return
 
-    # Логика для реферальной системы
     if context.args:
         try:
             referrer_id = int(context.args[0])
@@ -129,18 +125,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❗️Сначала примите условия, используя /start.")
         return
 
-    # Сообщение админ-панели
     if user_id in ADMIN_IDS:
         await admin_menu_handler(update, context)
         return
 
-    # Пользователь в чате
     if user_id in active_chats:
         partner_id = active_chats[user_id]
         await context.bot.send_message(partner_id, text)
         return
 
-    # Команды
     if text == "🔍 Поиск собеседника" or text == "🔍 Начать новый чат":
         if user_id in waiting_users:
             await update.message.reply_text("⏳ Поиск уже идёт...")
@@ -248,7 +241,6 @@ async def find_partner(context):
         active_chats[user2] = user1
         show_name_requests[(user1, user2)] = {user1: None, user2: None}
 
-        # Клавиатура с кнопкой "Начать новый чат"
         markup = ReplyKeyboardMarkup(
             [["🚫 Завершить чат", "🔍 Начать новый чат"], ["👤 Показать мой ник", "🙈 Не показывать ник"]],
             resize_keyboard=True
@@ -397,8 +389,14 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
+    # Параметры для вебхука
+    PORT = int(os.environ.get('PORT', 5000))
+    WEBHOOK_URL = "https://test-1-1-zard.onrender.com"  # Вставляем URL напрямую
+
     if not BOT_TOKEN or not ADMIN_PASSWORD:
         logging.error("Бот не может быть запущен без токена и пароля администратора. Проверьте переменные окружения.")
+        import sys
+        sys.exit(1)
     else:
         app = ApplicationBuilder().token(BOT_TOKEN).build()
         
@@ -412,4 +410,5 @@ if __name__ == '__main__':
         app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
         app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
 
-        app.run_polling()
+        # Запускаем бота в режиме вебхуков
+        app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
