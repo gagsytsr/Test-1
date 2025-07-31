@@ -393,11 +393,12 @@ if __name__ == '__main__':
     
     app.add_error_handler(error_handler)
     
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('admin', admin_command))
-
+    # Обработчики в порядке приоритета
     app.add_handler(CallbackQueryHandler(agree_callback, pattern='^agree$'))
     app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
+    
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('admin', admin_command))
     
     # MessageHandler для пароля администратора
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(ADMIN_PASSWORD) & not_admin_filter, password_handler))
