@@ -40,43 +40,60 @@ class NotAdminFilter(BaseFilter):
 
 not_admin_filter = NotAdminFilter()
 
-# ========== СТАРТ И СОГЛАСИЕ (ВРЕМЕННО УБИРАЕМ) ==========
+# ========== СТАРТ И СОГЛАСИЕ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in banned_users:
         await update.message.reply_text("❌ Вы заблокированы и не можете использовать бота.")
         return
+
+    if context.args:
+        try:
+            referrer_id = int(context.args[0])
+            if referrer_id != user_id and user_id not in invited_by:
+                if referrer_id not in referrals:
+                    referrals[referrer_id] = 0
+                referrals[referrer_id] += 1
+                invited_by[user_id] = referrer_id
+                await context.bot.send_message(referrer_id, f"🎉 По вашей ссылке зарегистрировался новый пользователь!")
+                logging.info(f"User {user_id} was invited by {referrer_id}")
+        except (ValueError, IndexError):
+            logging.error("Неверный формат реферальной ссылки.")
+
+    user_agreements[user_id] = False
+    agreement_text = (
+        "👋 Добро пожаловать в анонимный чат!\n\n"
+        "⚠️ Перед использованием подтвердите согласие с правилами:\n"
+        "• Запрещено нарушать законы.\n"
+        "• Соблюдайте уважение.\n"
+        "• Администрация не несет ответственности за контент пользователей.\n\n"
+        "Нажмите 'Согласен' чтобы начать."
+    )
+    keyboard = [[InlineKeyboardButton("✅ Согласен", callback_data="agree")]]
+    await update.message.reply_text(agreement_text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def agree_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
     
-    # Временно сразу показываем главное меню, чтобы проверить работу бота
-    user_agreements[user_id] = True 
+    try:
+        await query.answer()
+    except Exception as e:
+        logging.error("Ошибка при отправке ответа на callback-запрос: %s", e)
+        return
+
+    user_id = query.from_user.id
+    if user_id in banned_users:
+        await query.edit_message_text("❌ Вы заблокированы и не можете использовать бота.")
+        return
+        
+    user_agreements[user_id] = True
+    
+    try:
+        await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
+    except Exception as e:
+        logging.error("Ошибка при редактировании сообщения: %s", e)
+        
     await show_main_menu(update, user_id)
-
-# Временно комментируем функцию agree_callback
-# async def agree_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     logging.info("Получен callback-запрос с данными: %s", update.callback_query.data)
-#     query = update.callback_query
-    
-#     try:
-#         await query.answer()
-#         logging.info("Ответ на callback-запрос отправлен.")
-#     except Exception as e:
-#         logging.error("Ошибка при отправке ответа на callback-запрос: %s", e)
-#         return
-
-#     user_id = query.from_user.id
-#     if user_id in banned_users:
-#         await query.edit_message_text("❌ Вы заблокированы и не можете использовать бота.")
-#         return
-        
-#     user_agreements[user_id] = True
-    
-#     try:
-#         await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
-#         logging.info("Сообщение успешно отредактировано.")
-#     except Exception as e:
-#         logging.error("Ошибка при редактировании сообщения: %s", e)
-        
-#     await show_main_menu(update, user_id)
 
 async def show_main_menu(update, user_id):
     keyboard = [["🔍 Поиск собеседника"], ["⚠️ Сообщить о проблеме"], ["🔗 Мои рефералы"]]
@@ -381,21 +398,17 @@ if __name__ == '__main__':
 
     if not BOT_TOKEN or not ADMIN_PASSWORD:
         logging.error("Бот не может быть запущен без токена и пароля администратора. Проверьте переменные окружения.")
-        import sys
         sys.exit(1)
     else:
         app = ApplicationBuilder().token(BOT_TOKEN).build()
         
+        # Обработчик для текстовых сообщений
+        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
+        app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
+        app.add_handler(CallbackQueryHandler(agree_callback, pattern='^agree$'))
+        app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
+
         app.add_handler(CommandHandler('start', start))
         app.add_handler(CommandHandler('admin', admin_command))
 
-        # УБИРАЕМ:
-        # app.add_handler(CallbackQueryHandler(agree_callback, pattern='^agree$'))
-        
-        app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
-        
-        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
-        app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
-
         app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
-
