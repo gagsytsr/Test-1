@@ -114,6 +114,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❗️Сначала примите условия, используя /start.")
         return
 
+    if user_id in ADMIN_IDS:
+        await admin_menu_handler(update, context)
+        return
+
     if user_id in active_chats:
         partner_id = active_chats[user_id]
         await context.bot.send_message(partner_id, text)
@@ -384,16 +388,21 @@ if __name__ == '__main__':
     else:
         app = ApplicationBuilder().token(BOT_TOKEN).build()
         
-        # Добавляем обработчик для пароля администратора
-        # Он должен идти перед основным message_handler, чтобы не конфликтовать
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(ADMIN_PASSWORD) & not_admin_filter, password_handler))
-        
-        # Основные обработчики
+        # Улучшенный обработчик для пароля администратора, он срабатывает только когда ожидается ввод пароля
+        async def password_message_filter(update: Update) -> bool:
+            return update.message.text.strip() == ADMIN_PASSWORD and 'awaiting_admin_password' in app.user_data[update.effective_user.id]
+
         app.add_handler(CommandHandler('start', start))
         app.add_handler(CommandHandler('admin', admin_command))
+
         app.add_handler(CallbackQueryHandler(agree_callback, pattern='^agree$'))
         app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
+        
+        # Новый фильтр для обработки пароля
+        app.add_handler(MessageHandler(filters.TEXT & filters.Status(app.user_data, 'awaiting_admin_password'), password_handler))
+
         app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
         app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
 
         app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
+
