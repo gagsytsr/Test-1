@@ -4,6 +4,7 @@ from telegram.ext.filters import BaseFilter
 import asyncio
 import logging
 import os
+import sys
 
 # Настройка логирования для отладки
 logging.basicConfig(
@@ -18,7 +19,6 @@ ADMIN_IDS = set()
 
 if not BOT_TOKEN or not ADMIN_PASSWORD:
     logging.error("BOT_TOKEN или ADMIN_PASSWORD не установлены в переменных окружения. Бот не может быть запущен.")
-    import sys
     sys.exit(1)
 
 waiting_users = []
@@ -73,15 +73,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(agreement_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def agree_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Получен callback-запрос с данными: %s", update.callback_query.data)
     query = update.callback_query
-    await query.answer()
+    
+    # Ответ на запрос (обязательно)
+    try:
+        await query.answer()
+        logging.info("Ответ на callback-запрос отправлен.")
+    except Exception as e:
+        logging.error("Ошибка при отправке ответа на callback-запрос: %s", e)
+        return
+
     user_id = query.from_user.id
     if user_id in banned_users:
         await query.edit_message_text("❌ Вы заблокированы и не можете использовать бота.")
         return
         
     user_agreements[user_id] = True
-    await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
+    
+    try:
+        await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
+        logging.info("Сообщение успешно отредактировано.")
+    except Exception as e:
+        logging.error("Ошибка при редактировании сообщения: %s", e)
+        
     await show_main_menu(update, user_id)
 
 async def show_main_menu(update, user_id):
@@ -107,7 +122,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
     
-    # Проверяем, ожидает ли пользователь ввода пароля, и если да, то передаем управление
     if context.user_data.get('awaiting_admin_password'):
         await password_handler(update, context)
         return
@@ -275,7 +289,7 @@ async def handle_show_name_request(user_id, context, agree):
         name1 = f"@{(await context.bot.get_chat(user_id)).username or 'Без ника'}"
         name2 = f"@{(await context.bot.get_chat(partner_id)).username or 'Без ника'}"
         await context.bot.send_message(user_id, f"🔓 Ник собеседника: {name2}")
-        await context.bot.send_message(partner_id, f"🔓 Ник собесемника: {name1}")
+        await context.bot.send_message(partner_id, f"🔓 Ник собеседника: {name1}")
     else:
         await context.bot.send_message(user_id, "❌ Кто-то из вас отказался показывать ник.")
         await context.bot.send_message(partner_id, "❌ Кто-то из вас отказался показывать ник.")
@@ -306,7 +320,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['awaiting_admin_password'] = True
 
 async def password_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Теперь эта функция вызывается только из message_handler
     if context.user_data.get('awaiting_admin_password'):
         if update.message.text.strip() == ADMIN_PASSWORD:
             ADMIN_IDS.add(update.effective_user.id)
@@ -394,15 +407,13 @@ if __name__ == '__main__':
     else:
         app = ApplicationBuilder().token(BOT_TOKEN).build()
         
-        # Основные обработчики
-        app.add_handler(CommandHandler('start', start))
-        app.add_handler(CommandHandler('admin', admin_command))
-
-        app.add_handler(CallbackQueryHandler(agree_callback, pattern='^agree$'))
-        app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
-        
         # Обработчик для текстовых сообщений
         app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
         app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
+        app.add_handler(CallbackQueryHandler(agree_callback, pattern='^agree$'))
+        app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
+
+        app.add_handler(CommandHandler('start', start))
+        app.add_handler(CommandHandler('admin', admin_command))
 
         app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
