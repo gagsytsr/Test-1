@@ -1,5 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.ext.filters import BaseFilter
 import asyncio
 import logging
 import os
@@ -14,11 +15,11 @@ logging.basicConfig(
 # Загружаем токен бота и пароль администратора из переменных окружения
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+ADMIN_IDS = set()
 
 # Проверка, что переменные окружения установлены
 if not BOT_TOKEN or not ADMIN_PASSWORD:
     logging.error("BOT_TOKEN или ADMIN_PASSWORD не установлены в переменных окружения. Бот не может быть запущен.")
-    # Вместо этого можно вызвать sys.exit() для завершения работы
     # import sys
     # sys.exit(1)
 
@@ -42,6 +43,16 @@ available_interests = ["Музыка", "Игры", "Кино", "Путешест
 # Новые переменные для реферальной системы
 referrals = {}  # {referrer_id: count}
 invited_by = {} # {new_user_id: referrer_id}
+
+# ========== ФИЛЬТРЫ ==========
+class NotAdminFilter(BaseFilter):
+    """
+    Пользовательский фильтр, который пропускает сообщения только от НЕ-админов.
+    """
+    def filter(self, message):
+        return message.from_user.id not in ADMIN_IDS
+
+not_admin_filter = NotAdminFilter()
 
 # ========== СТАРТ И СОГЛАСИЕ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -397,7 +408,7 @@ if __name__ == '__main__':
         app.add_handler(CallbackQueryHandler(agree_callback, pattern='^agree$'))
         app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
 
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(ADMIN_PASSWORD) & filters.User(lambda user: user.id not in ADMIN_IDS), password_handler))
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(ADMIN_PASSWORD) & not_admin_filter, password_handler))
         app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
         app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
 
