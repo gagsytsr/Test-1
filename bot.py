@@ -12,35 +12,24 @@ logging.basicConfig(
 )
 
 # ========== ПЕРЕМЕННЫЕ ==========
-# Загружаем токен бота и пароль администратора из переменных окружения
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 ADMIN_IDS = set()
 
-# Проверка, что переменные окружения установлены
 if not BOT_TOKEN or not ADMIN_PASSWORD:
     logging.error("BOT_TOKEN или ADMIN_PASSWORD не установлены в переменных окружения. Бот не может быть запущен.")
     import sys
     sys.exit(1)
 
-# Временное хранилище
 waiting_users = []
 active_chats = {}
 show_name_requests = {}
 user_agreements = {}
-
-# Добавляем бан-лист и жалобы
 banned_users = set()
 reported_users = {}
-
-# Словарь для хранения запланированных задач на отмену поиска
 search_timeouts = {}
-
-# Новые переменные для поиска по интересам
 user_interests = {}
 available_interests = ["Музыка", "Игры", "Кино", "Путешествия", "Спорт", "Книги"]
-
-# Новые переменные для реферальной системы
 referrals = {}
 invited_by = {}
 
@@ -123,10 +112,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not user_agreements.get(user_id, False):
         await update.message.reply_text("❗️Сначала примите условия, используя /start.")
-        return
-
-    if user_id in ADMIN_IDS:
-        await admin_menu_handler(update, context)
         return
 
     if user_id in active_chats:
@@ -315,7 +300,7 @@ async def password_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('awaiting_admin_password'):
         if update.message.text.strip() == ADMIN_PASSWORD:
             ADMIN_IDS.add(update.effective_user.id)
-            await update.message.reply_text("✅ Пароль верный. Добро пожаловать в админ-панель.")
+            await update.message.reply_text("✅ Пароль верный. Добро пожаловать в админ-панель.", reply_markup=ReplyKeyboardRemove())
             await show_admin_menu(update)
         else:
             await update.message.reply_text("❌ Неверный пароль.")
@@ -389,9 +374,8 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
-    # Параметры для вебхука
     PORT = int(os.environ.get('PORT', 5000))
-    WEBHOOK_URL = "https://test-1-1-zard.onrender.com"  # Вставляем URL напрямую
+    WEBHOOK_URL = "https://test-1-1-zard.onrender.com"
 
     if not BOT_TOKEN or not ADMIN_PASSWORD:
         logging.error("Бот не может быть запущен без токена и пароля администратора. Проверьте переменные окружения.")
@@ -400,15 +384,16 @@ if __name__ == '__main__':
     else:
         app = ApplicationBuilder().token(BOT_TOKEN).build()
         
+        # Добавляем обработчик для пароля администратора
+        # Он должен идти перед основным message_handler, чтобы не конфликтовать
+        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(ADMIN_PASSWORD) & not_admin_filter, password_handler))
+        
+        # Основные обработчики
         app.add_handler(CommandHandler('start', start))
         app.add_handler(CommandHandler('admin', admin_command))
-
         app.add_handler(CallbackQueryHandler(agree_callback, pattern='^agree$'))
         app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
-
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(ADMIN_PASSWORD) & not_admin_filter, password_handler))
         app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
         app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
 
-        # Запускаем бота в режиме вебхуков
         app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
