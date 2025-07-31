@@ -1,4 +1,4 @@
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import asyncio
 import logging
@@ -27,8 +27,11 @@ user_agreements = {}
 banned_users = set()
 reported_users = {}
 search_timeouts = {}
-user_interests = {}
+
+# Новые переменные для поиска по интересам
+user_interests = {} # {user_id: [interest1, interest2]}
 available_interests = ["Музыка", "Игры", "Кино", "Путешествия", "Спорт", "Книги"]
+
 referrals = {}
 invited_by = {}
 
@@ -43,7 +46,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Вы заблокированы и не можете использовать бота.")
         return
 
-    # Логика для реферальной системы
     if context.args:
         try:
             referrer_id = int(context.args[0])
@@ -66,11 +68,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Администрация не несет ответственности за контент пользователей.\n\n"
         "Нажмите 'Согласен' чтобы начать."
     )
-    # Используем ReplyKeyboardMarkup вместо InlineKeyboardMarkup
     keyboard = [["✅ Согласен"]]
     await update.message.reply_text(agreement_text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
 
-# ========== ОБРАБОТЧИК КНОПКИ "СОГЛАСЕН" ==========
 async def agree_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if update.message.text == "✅ Согласен":
@@ -82,7 +82,6 @@ async def agree_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.", reply_markup=ReplyKeyboardRemove())
         await show_main_menu(update, user_id)
     else:
-        # Если пользователь ввел что-то другое, но еще не согласился
         if not user_agreements.get(user_id, False):
             await update.message.reply_text("❗️Сначала примите условия, используя кнопку 'Согласен'.")
 
@@ -104,7 +103,7 @@ async def referrals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-# ========== ОБРАБОТЧИК СООБЩЕНИЙ ==========
+# ========== ПОИСК И ЧАТ ==========
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
@@ -129,23 +128,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(partner_id, text)
         return
 
+    # Команды
     if text == "🔍 Поиск собеседника" or text == "🔍 Начать новый чат":
         if user_id in waiting_users:
             await update.message.reply_text("⏳ Поиск уже идёт...")
             return
         
-        # Здесь будет логика с интересами
-        await update.message.reply_text("Поиск по интересам пока не реализован. Ищем случайного собеседника.")
-        waiting_users.append(user_id)
-        await find_partner(context)
+        await show_interests_menu(update, user_id)
         
     elif text == "⚠️ Сообщить о проблеме":
         if user_id in active_chats:
             partner_id = active_chats[user_id]
             reported_users[user_id] = partner_id
-            
             await update.message.reply_text("⚠️ Спасибо за сообщение! Администрация проверит ситуацию.")
-            
             for admin_id in ADMIN_IDS:
                 await context.bot.send_message(
                     admin_id,
@@ -166,13 +161,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🔗 Мои рефералы":
         await referrals_command(update, context)
     else:
-        await update.message.reply_text("❓ Неизвестная команда.")
+        # Проверяем, если пользователь выбирает интерес или нажимает "Начать поиск"
+        if text in available_interests or text == "➡️ Начать поиск":
+            await handle_interest_selection(update, context)
+        else:
+            await update.message.reply_text("❓ Неизвестная команда.")
 
 async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in active_chats:
         partner_id = active_chats[user_id]
-        
         if update.message.photo:
             await context.bot.send_photo(partner_id, photo=update.message.photo[-1].file_id, caption=update.message.caption)
         elif update.message.video:
@@ -182,21 +180,75 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif update.message.sticker:
             await context.bot.send_sticker(partner_id, sticker=update.message.sticker.file_id)
 
+async def show_interests_menu(update, user_id):
+    keyboard = [[KeyboardButton(interest)] for interest in available_interests]
+    keyboard.append([["➡️ Начать поиск"]])
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text(
+        "Выберите ваши интересы (можно несколько), чтобы найти более подходящего собеседника:",
+        reply_markup=reply_markup
+    )
+    user_interests[user_id] = [] # Очищаем интересы для нового поиска
+
+async def handle_interest_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text
+
+    if text in available_interests:
+        if text in user_interests.get(user_id, []):
+            user_interests[user_id].remove(text)
+            await update.message.reply_text(f"Интерес '{text}' убран.")
+        else:
+            user_interests.setdefault(user_id, []).append(text)
+            await update.message.reply_text(f"Интерес '{text}' добавлен.")
+    elif text == "➡️ Начать поиск":
+        await update.message.reply_text(f"✅ Ваши интересы: {', '.join(user_interests.get(user_id, [])) or 'Не выбраны'}.\nИщем собеседника...", reply_markup=ReplyKeyboardRemove())
+        waiting_users.append(user_id)
+        
+        job = context.application.job_queue.run_once(
+            search_timeout_callback,
+            120,
+            chat_id=user_id,
+            name=str(user_id)
+        )
+        search_timeouts[user_id] = job
+        
+        await find_partner(context)
+        await show_main_menu(update, user_id)
+
 async def find_partner(context):
     if len(waiting_users) >= 2:
-        user1 = waiting_users.pop(0)
-        user2 = waiting_users.pop(0)
+        user1_id = waiting_users.pop(0)
+        user2_id = waiting_users.pop(0)
 
-        active_chats[user1] = user2
-        active_chats[user2] = user1
-        show_name_requests[(user1, user2)] = {user1: None, user2: None}
+        # Отменяем таймауты для обоих пользователей
+        if user1_id in search_timeouts:
+            search_timeouts.pop(user1_id).job.schedule_removal()
+        if user2_id in search_timeouts:
+            search_timeouts.pop(user2_id).job.schedule_removal()
+            
+        active_chats[user1_id] = user2_id
+        active_chats[user2_id] = user1_id
+        show_name_requests[(user1_id, user2_id)] = {user1_id: None, user2_id: None}
 
         markup = ReplyKeyboardMarkup(
             [["🚫 Завершить чат", "🔍 Начать новый чат"], ["👤 Показать мой ник", "🙈 Не показывать ник"]],
             resize_keyboard=True
         )
-        await context.bot.send_message(user1, "👤 Собеседник найден! Общайтесь.", reply_markup=markup)
-        await context.bot.send_message(user2, "👤 Собеседник найден! Общайтесь.", reply_markup=markup)
+        await context.bot.send_message(user1_id, "👤 Собеседник найден! Общайтесь.", reply_markup=markup)
+        await context.bot.send_message(user2_id, "👤 Собеседник найден! Общайтесь.", reply_markup=markup)
+
+async def search_timeout_callback(context: ContextTypes.DEFAULT_TYPE):
+    user_id = context.job.chat_id
+    if user_id in waiting_users:
+        waiting_users.remove(user_id)
+        search_timeouts.pop(user_id, None)
+        await context.bot.send_message(
+            user_id,
+            "⏳ Время поиска истекло. Попробуйте ещё раз.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        await show_main_menu(None, user_id)
 
 async def handle_show_name_request(user_id, context, agree):
     if user_id not in active_chats:
@@ -334,7 +386,6 @@ if __name__ == '__main__':
     
     app.add_error_handler(error_handler)
     
-    # Обработчики в порядке приоритета
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('admin', admin_command))
 
