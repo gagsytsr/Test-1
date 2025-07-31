@@ -1,5 +1,6 @@
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.ext.filters import BaseFilter
 import asyncio
 import logging
 import os
@@ -29,11 +30,18 @@ reported_users = {}
 search_timeouts = {}
 
 # Новые переменные для поиска по интересам
-user_interests = {} # {user_id: [interest1, interest2]}
+user_interests = {}
 available_interests = ["Музыка", "Игры", "Кино", "Путешествия", "Спорт", "Книги"]
 
 referrals = {}
 invited_by = {}
+
+# ========== ФИЛЬТРЫ ==========
+class NotAdminFilter(BaseFilter):
+    def filter(self, message):
+        return message.from_user.id not in ADMIN_IDS
+
+not_admin_filter = NotAdminFilter()
 
 # ========== ОБРАБОТЧИК ОШИБОК ==========
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -68,7 +76,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Администрация не несет ответственности за контент пользователей.\n\n"
         "Нажмите 'Согласен' чтобы начать."
     )
-    keyboard = [["✅ Согласен"]]
+    keyboard = [[KeyboardButton("✅ Согласен")]]
     await update.message.reply_text(agreement_text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
 
 async def agree_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -128,7 +136,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(partner_id, text)
         return
 
-    # Команды
     if text == "🔍 Поиск собеседника" or text == "🔍 Начать новый чат":
         if user_id in waiting_users:
             await update.message.reply_text("⏳ Поиск уже идёт...")
@@ -140,7 +147,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in active_chats:
             partner_id = active_chats[user_id]
             reported_users[user_id] = partner_id
+            
             await update.message.reply_text("⚠️ Спасибо за сообщение! Администрация проверит ситуацию.")
+            
             for admin_id in ADMIN_IDS:
                 await context.bot.send_message(
                     admin_id,
@@ -161,16 +170,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🔗 Мои рефералы":
         await referrals_command(update, context)
     else:
-        # Проверяем, если пользователь выбирает интерес или нажимает "Начать поиск"
-        if text in available_interests or text == "➡️ Начать поиск":
-            await handle_interest_selection(update, context)
-        else:
-            await update.message.reply_text("❓ Неизвестная команда.")
+        await update.message.reply_text("❓ Неизвестная команда.")
 
 async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in active_chats:
         partner_id = active_chats[user_id]
+        
         if update.message.photo:
             await context.bot.send_photo(partner_id, photo=update.message.photo[-1].file_id, caption=update.message.caption)
         elif update.message.video:
@@ -180,29 +186,38 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif update.message.sticker:
             await context.bot.send_sticker(partner_id, sticker=update.message.sticker.file_id)
 
+# Функции для поиска по интересам с Inline-кнопками
 async def show_interests_menu(update, user_id):
-    keyboard = [[KeyboardButton(interest)] for interest in available_interests]
-    keyboard.append([["➡️ Начать поиск"]])
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    keyboard = [[InlineKeyboardButton(interest, callback_data=f"interest_{interest}")] for interest in available_interests]
+    keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "Выберите ваши интересы (можно несколько), чтобы найти более подходящего собеседника:",
         reply_markup=reply_markup
     )
-    user_interests[user_id] = [] # Очищаем интересы для нового поиска
+    user_interests[user_id] = []
 
-async def handle_interest_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-
-    if text in available_interests:
-        if text in user_interests.get(user_id, []):
-            user_interests[user_id].remove(text)
-            await update.message.reply_text(f"Интерес '{text}' убран.")
+async def interests_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    if query.data.startswith("interest_"):
+        interest = query.data.replace("interest_", "")
+        if interest in user_interests.get(user_id, []):
+            user_interests[user_id].remove(interest)
         else:
-            user_interests.setdefault(user_id, []).append(text)
-            await update.message.reply_text(f"Интерес '{text}' добавлен.")
-    elif text == "➡️ Начать поиск":
-        await update.message.reply_text(f"✅ Ваши интересы: {', '.join(user_interests.get(user_id, [])) or 'Не выбраны'}.\nИщем собеседника...", reply_markup=ReplyKeyboardRemove())
+            user_interests.setdefault(user_id, []).append(interest)
+        
+        keyboard = []
+        for interest in available_interests:
+            text = f"✅ {interest}" if interest in user_interests.get(user_id, []) else interest
+            keyboard.append([InlineKeyboardButton(text, callback_data=f"interest_{interest}")])
+        keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+        
+    elif query.data == "interests_done":
+        await query.edit_message_text(f"✅ Ваши интересы: {', '.join(user_interests.get(user_id, [])) or 'Не выбраны'}.\nИщем собеседника...")
         waiting_users.append(user_id)
         
         job = context.application.job_queue.run_once(
@@ -214,14 +229,12 @@ async def handle_interest_selection(update: Update, context: ContextTypes.DEFAUL
         search_timeouts[user_id] = job
         
         await find_partner(context)
-        await show_main_menu(update, user_id)
 
 async def find_partner(context):
     if len(waiting_users) >= 2:
         user1_id = waiting_users.pop(0)
         user2_id = waiting_users.pop(0)
 
-        # Отменяем таймауты для обоих пользователей
         if user1_id in search_timeouts:
             search_timeouts.pop(user1_id).job.schedule_removal()
         if user2_id in search_timeouts:
@@ -386,12 +399,18 @@ if __name__ == '__main__':
     
     app.add_error_handler(error_handler)
     
+    # Обработчики в порядке приоритета:
+    # 1. CallbackQueryHandler (для inline-кнопок)
+    # 2. CommandHandler (для команд /start, /admin)
+    # 3. MessageHandler (для текстовых и медиа-сообщений)
+
+    app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
+    
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('admin', admin_command))
 
-    # Обработчик кнопки "Согласен"
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^✅ Согласен$"), agree_button_handler))
-
+    
     # Основной обработчик текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
