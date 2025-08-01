@@ -5,16 +5,14 @@ import sys
 
 from telegram import (
     Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    KeyboardButton,
 )
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -29,7 +27,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 
-# URL для вебхуков, нужен для развёртывания на сервере.
 WEBHOOK_URL = os.environ.get('WEBHOOK_URL', "https://test-1-1-zard.onrender.com")
 
 if not BOT_TOKEN or not ADMIN_PASSWORD:
@@ -95,47 +92,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• Администрация не несет ответственности за контент.\n\n"
         "Нажмите 'Согласен', чтобы начать."
     )
-    keyboard = [[InlineKeyboardButton("✅ Согласен", callback_data="agree")]]
-    await update.message.reply_text(agreement_text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-
-async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Единый обработчик всех callback-запросов."""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    user_id = query.from_user.id
-
-    if user_id in banned_users:
-        await query.edit_message_text("❌ Вы заблокированы и не можете использовать бота.")
-        return
-
-    if data == "agree":
-        user_agreements[user_id] = True
-        await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
-        await show_main_menu(user_id, context)
-    
-    elif data.startswith("interest_"):
-        interest = data.replace("interest_", "")
-        user_interests.setdefault(user_id, [])
-        if interest in user_interests[user_id]:
-            user_interests[user_id].remove(interest)
-        else:
-            user_interests[user_id].append(interest)
-        
-        keyboard = []
-        for i in AVAILABLE_INTERESTS:
-            text = f"✅ {i}" if i in user_interests[user_id] else i
-            keyboard.append([InlineKeyboardButton(text, callback_data=f"interest_{i}")])
-        keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
-    
-    elif data == "interests_done":
-        await query.edit_message_text(
-            f"✅ Ваши интересы: {', '.join(user_interests.get(user_id, [])) or 'Не выбраны'}.\nИщем собеседника..."
-        )
-        await start_search(user_id, context)
+    keyboard = [[KeyboardButton("✅ Согласен")]]
+    await update.message.reply_text(agreement_text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True))
 
 
 async def show_main_menu(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -162,16 +120,45 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     if user_id in banned_users:
         return
-    
+
+    # Логика для согласия с правилами
+    if text == "✅ Согласен" and not user_agreements.get(user_id):
+        user_agreements[user_id] = True
+        await update.message.reply_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.", reply_markup=ReplyKeyboardRemove())
+        await show_main_menu(user_id, context)
+        return
+
     if not user_agreements.get(user_id):
         await update.message.reply_text("❗️Сначала примите условия, используя /start.")
         return
 
+    # Логика для выбора интересов
+    if context.user_data.get('awaiting_interests'):
+        if text in AVAILABLE_INTERESTS:
+            user_interests.setdefault(user_id, [])
+            if text in user_interests[user_id]:
+                user_interests[user_id].remove(text)
+                await update.message.reply_text(f"Интерес '{text}' убран. Текущие: {', '.join(user_interests[user_id]) or 'Нет'}")
+            else:
+                user_interests[user_id].append(text)
+                await update.message.reply_text(f"Интерес '{text}' добавлен. Текущие: {', '.join(user_interests[user_id])}")
+            return
+        elif text == "➡️ Готово":
+            del context.user_data['awaiting_interests']
+            await update.message.reply_text(
+                f"✅ Ваши интересы: {', '.join(user_interests.get(user_id, [])) or 'Не выбраны'}.\nИщем собеседника...",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            await start_search(user_id, context)
+            return
+
+    # Если пользователь в чате, пересылаем сообщение собеседнику
     if user_id in active_chats:
         partner_id = active_chats[user_id]
         await context.bot.send_message(partner_id, text)
         return
 
+    # Обработка команд из главного меню
     if text == "🔍 Поиск собеседника" or text == "🔍 Начать новый чат":
         if user_id in waiting_users:
             await update.message.reply_text("⏳ Поиск уже идёт...")
@@ -211,16 +198,17 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def show_interests_menu(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает меню выбора интересов."""
-    keyboard = [[InlineKeyboardButton(interest, callback_data=f"interest_{interest}")] for interest in AVAILABLE_INTERESTS]
-    keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    keyboard = [[KeyboardButton(interest)] for interest in AVAILABLE_INTERESTS]
+    keyboard.append([KeyboardButton("➡️ Готово")])
+    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
     user_interests[user_id] = []
     await context.bot.send_message(
         user_id,
         "Выберите ваши интересы (можно несколько), чтобы найти более подходящего собеседника:",
-        reply_markup=reply_markup
+        reply_markup=markup
     )
+    context.user_data['awaiting_interests'] = True
 
 
 async def start_search(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -355,10 +343,9 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if user_id in ADMIN_IDS:
         await show_admin_menu(user_id, context)
     else:
-        await update.message.reply_text("🔐 Введите пароль для доступа к админ-панели:")
+        await update.message.reply_text("🔐 Введите пароль для доступа к админ-панели:", reply_markup=ReplyKeyboardRemove())
         context.user_data['awaiting_admin_password'] = True
 
-# Новый обработчик для пароля
 async def password_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Проверяет пароль, если пользователь его ожидает."""
     if context.user_data.get('awaiting_admin_password'):
@@ -370,9 +357,9 @@ async def password_check_handler(update: Update, context: ContextTypes.DEFAULT_T
         else:
             await update.message.reply_text("❌ Неверный пароль.")
         del context.user_data['awaiting_admin_password']
+    elif user_id in ADMIN_IDS:
+        await admin_menu_handler(update, context)
     else:
-        # Если пользователь не ожидал пароль, но написал что-то,
-        # обрабатываем это как обычное сообщение.
         await message_handler(update, context)
 
 
@@ -454,16 +441,9 @@ def main() -> None:
     app.add_handler(CommandHandler('start', start_command))
     app.add_handler(CommandHandler('admin', admin_command))
 
-    # Изменённый порядок, чтобы сначала обработать пароль
-    # Обычный MessageHandler, который проверяет user_data внутри функции
+    # Один общий обработчик для текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), password_check_handler))
     
-    # Обработчик админ-команд (для тех, кто уже в админке)
-    # Этот фильтр нужно обновлять, так как ADMIN_IDS - это динамический set
-    # app.add_handler(MessageHandler(filters.TEXT & filters.User(user_id=list(ADMIN_IDS)), admin_menu_handler))
-    # Для решения этой проблемы, мы можем проверять, является ли пользователь админом внутри обработчика
-    
-    app.add_handler(CallbackQueryHandler(handle_callback_query))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
     
     app.add_error_handler(error_handler)
