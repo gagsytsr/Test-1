@@ -31,7 +31,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 
-# Вебхук теперь жёстко прописан в коде, как ты и просил.
+# Вебхук теперь жёстко прописан в коде.
 WEBHOOK_URL = "https://test-1-1-zard.onrender.com"
 
 if not BOT_TOKEN or not ADMIN_PASSWORD:
@@ -73,7 +73,7 @@ banned_users = set(load_data(BANS_FILE, {"banned": []})["banned"])
 muted_users = set(load_data(MUTES_FILE, {"muted": []})["muted"])
 user_agreements = load_data(AGREEMENTS_FILE, {})
 user_profiles = load_data(PROFILES_FILE, {})
-user_interests = {} # Временно, для поиска
+user_interests = {}
 waiting_users = []
 active_chats = load_data(CHATS_FILE, {})
 reported_users = load_data(REPORTED_FILE, {"reports": {}})
@@ -81,10 +81,8 @@ referrals = load_data(REFERRALS_FILE, {"referrals": {}})["referrals"]
 invited_by = {}
 user_likes: Dict[str, int] = load_data(LIKES_FILE, {"likes": {}})["likes"]
 
-# Переменные для отслеживания состояний
-user_states = {} # Используется для пошагового заполнения профиля или других действий
+user_states = {}
 
-# Доступные для выбора интересы
 AVAILABLE_INTERESTS = ["Музыка", "Игры", "Кино", "Путешествия", "Спорт", "Книги"]
 GENDERS = ["Мужчина", "Женщина", "Другое"]
 
@@ -145,6 +143,13 @@ async def show_main_menu(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> No
     ]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await context.bot.send_message(user_id, "Выберите действие:", reply_markup=markup)
+
+
+async def show_search_menu(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает меню поиска собеседника."""
+    keyboard = [["🚫 Отменить поиск"]]
+    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await context.bot.send_message(user_id, "⏳ Идёт поиск собеседника. Вы можете отменить его.", reply_markup=markup)
 
 
 async def show_chat_menu(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -235,16 +240,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # Обработка команд из главного меню
-    if text == "🔍 Поиск собеседника" or text == "🔍 Начать новый чат":
+    if text == "🔍 Поиск собеседника":
         if user_id in waiting_users:
             await update.message.reply_text("⏳ Поиск уже идёт...")
         else:
             await show_interests_menu(user_id, context)
     
+    elif text == "🚫 Отменить поиск":
+        await cancel_search(user_id, context)
+
     elif text == "⚠️ Сообщить о проблеме":
         await report_issue(user_id, update.effective_user.username, context)
 
-    elif text == "🚫 Завершить чат":
+    elif text == "🚫 Завершить чат" or text == "🔍 Начать новый чат":
         await end_chat(user_id, context)
         
     elif text == "👤 Показать мой ник":
@@ -323,16 +331,22 @@ async def show_interests_menu(user_id: str, context: ContextTypes.DEFAULT_TYPE) 
 
 async def start_search(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Запускает поиск собеседника."""
+    # Убеждаемся, что пользователь ещё не в поиске
+    if user_id in waiting_users:
+        return
+        
     waiting_users.append(user_id)
+    await show_search_menu(user_id, context)
     
     job = context.application.job_queue.run_once(
         search_timeout_callback,
-        120,
+        120, # Тайм-аут 2 минуты
         chat_id=int(user_id),
         name=user_id
     )
     search_timeouts[user_id] = job
     
+    # Сразу запускаем проверку, чтобы найти пару, если есть
     await find_partner(context)
 
 
@@ -369,6 +383,16 @@ async def search_timeout_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         await show_main_menu(user_id, context)
 
+async def cancel_search(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отменяет поиск собеседника."""
+    if user_id in waiting_users:
+        waiting_users.remove(user_id)
+        if user_id in search_timeouts:
+            search_timeouts.pop(user_id).job.schedule_removal()
+        await context.bot.send_message(user_id, "❌ Поиск отменён.", reply_markup=ReplyKeyboardRemove())
+        await show_main_menu(user_id, context)
+    else:
+        await context.bot.send_message(user_id, "❗️ Вы не находитесь в поиске.")
 
 async def end_chat(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Завершает текущий чат."""
