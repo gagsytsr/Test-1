@@ -99,15 +99,15 @@ async def agree_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     user_agreements[user_id] = True
     await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
-    await show_main_menu(update, user_id)
+    # ИСПРАВЛЕНО: Добавлена передача контекста
+    await show_main_menu(update, context, user_id)
 
-async def show_main_menu(update, user_id):
+# ИСПРАВЛЕНО: Добавлен параметр context
+async def show_main_menu(update, context, user_id):
     keyboard = [["🔍 Поиск собеседника"], ["⚠️ Сообщить о проблеме"], ["🔗 Мои рефералы"]]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    if update:
-        await update.effective_chat.send_message("Выберите действие:", reply_markup=markup)
-    else:
-        await context.bot.send_message(user_id, "Выберите действие:", reply_markup=markup)
+    # ИСПРАВЛЕНО: Всегда используем context для отправки сообщений
+    await context.bot.send_message(user_id, "Выберите действие:", reply_markup=markup)
 
 async def referrals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -130,7 +130,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text.strip() == ADMIN_PASSWORD:
             ADMIN_IDS.add(user_id)
             await update.message.reply_text("✅ Пароль верный. Добро пожаловать в админ-панель.", reply_markup=ReplyKeyboardRemove())
-            await show_admin_menu(update)
+            await show_admin_menu(update, context)  # Исправлено: добавлен context
         else:
             await update.message.reply_text("❌ Неверный пароль. Попробуйте снова.")
         context.user_data['awaiting_admin_password'] = False
@@ -139,6 +139,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in banned_users:
         return
 
+    # ИСПРАВЛЕНО: Проверка согласия перед обработкой сообщений
     if not user_agreements.get(user_id, False):
         await update.message.reply_text("❗️Сначала примите условия, используя /start.")
         return
@@ -157,7 +158,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⏳ Поиск уже идёт...")
             return
         
-        await show_interests_menu(update, user_id)
+        await show_interests_menu(update, user_id, context)  # Исправлено: добавлен context
         
     elif text == "⚠️ Сообщить о проблеме":
         if user_id in active_chats:
@@ -202,11 +203,13 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif update.message.sticker:
             await context.bot.send_sticker(partner_id, sticker=update.message.sticker.file_id)
 
-async def show_interests_menu(update, user_id):
+# ИСПРАВЛЕНО: Добавлен параметр context
+async def show_interests_menu(update, user_id, context):
     keyboard = [[InlineKeyboardButton(interest, callback_data=f"interest_{interest}")] for interest in available_interests]
     keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
+    await context.bot.send_message(
+        user_id,
         "Выберите ваши интересы (можно несколько), чтобы найти более подходящего собеседника:",
         reply_markup=reply_markup
     )
@@ -239,7 +242,7 @@ async def interests_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             120,
             chat_id=user_id,
             name=str(user_id)
-        )  # Исправлено: добавлена закрывающая скобка
+        )
         search_timeouts[user_id] = job
         
         await find_partner(context)
@@ -275,7 +278,8 @@ async def search_timeout_callback(context: ContextTypes.DEFAULT_TYPE):
             "⏳ Время поиска истекло. Попробуйте ещё раз.",
             reply_markup=ReplyKeyboardRemove()
         )
-        await show_main_menu(None, user_id)
+        # ИСПРАВЛЕНО: Добавлена передача контекста
+        await show_main_menu(None, context, user_id)
 
 async def handle_show_name_request(user_id, context, agree):
     if user_id not in active_chats:
@@ -324,12 +328,13 @@ async def end_chat(user_id, context):
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in ADMIN_IDS:
-        await show_admin_menu(update)
+        await show_admin_menu(update, context)  # Исправлено: добавлен context
     else:
         await update.message.reply_text("🔐 Введите пароль для доступа к админ-панели:")
         context.user_data['awaiting_admin_password'] = True
 
-async def show_admin_menu(update: Update):
+# ИСПРАВЛЕНО: Добавлен параметр context
+async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         ["📊 Статистика", "♻️ Завершить все чаты"],
         ["👮‍♂️ Забанить", "🔓 Разбанить"],
