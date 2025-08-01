@@ -416,8 +416,8 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('admin', admin_command))
 
-    # Исправленная строка
-    app.add_handler(MessageHandler(filters.TEXT & filters.User(user_ids=ADMIN_IDS), admin_menu_handler))
+    # ИСПРАВЛЕННАЯ СТРОКА
+    app.add_handler(MessageHandler(filters.TEXT & filters.User(user_id=ADMIN_IDS), admin_menu_handler))
 
     # Основной обработчик текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
