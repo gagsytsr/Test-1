@@ -26,21 +26,17 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # --- Настройки ---
-# BOT_TOKEN и ADMIN_PASSWORD должны быть установлены как переменные окружения.
-# Если они не заданы, бот не запустится.
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 
 # URL для вебхуков, нужен для развёртывания на сервере.
-WEBHOOK_URL = "https://test-1-1-zard.onrender.com"
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL', "https://test-1-1-zard.onrender.com")
 
 if not BOT_TOKEN or not ADMIN_PASSWORD:
     logging.error("BOT_TOKEN или ADMIN_PASSWORD не заданы в переменных окружения.")
     sys.exit(1)
 
 # --- Переменные состояния ---
-# Эти словари и списки будут хранить информацию о пользователях и чатах
-# пока бот работает. После перезапуска все данные будут потеряны.
 ADMIN_IDS = set()
 banned_users = set()
 user_agreements = {}
@@ -53,7 +49,6 @@ show_name_requests = {}
 referrals = {}
 invited_by = {}
 
-# Доступные для выбора интересы
 AVAILABLE_INTERESTS = ["Музыка", "Игры", "Кино", "Путешествия", "Спорт", "Книги"]
 
 # --- Обработчики ошибок ---
@@ -74,7 +69,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ Вы заблокированы и не можете использовать бота.")
         return
 
-    # Обработка реферальной ссылки, если она есть
     if context.args:
         try:
             referrer_id = int(context.args[0])
@@ -89,12 +83,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except (ValueError, IndexError):
             logging.error("Неверный формат реферальной ссылки.")
 
-    # Проверка согласия с правилами
     if user_agreements.get(user_id):
         await show_main_menu(user_id, context)
         return
 
-    # Запрашиваем согласие
     agreement_text = (
         "👋 Добро пожаловать в анонимный чат!\n\n"
         "⚠️ Перед использованием подтвердите согласие с правилами:\n"
@@ -175,13 +167,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("❗️Сначала примите условия, используя /start.")
         return
 
-    # Если пользователь в чате, пересылаем сообщение собеседнику
     if user_id in active_chats:
         partner_id = active_chats[user_id]
         await context.bot.send_message(partner_id, text)
         return
 
-    # Обработка команд из главного меню
     if text == "🔍 Поиск собеседника" or text == "🔍 Начать новый чат":
         if user_id in waiting_users:
             await update.message.reply_text("⏳ Поиск уже идёт...")
@@ -225,7 +215,7 @@ async def show_interests_menu(user_id: int, context: ContextTypes.DEFAULT_TYPE) 
     keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    user_interests[user_id] = [] # Сбрасываем интересы перед выбором
+    user_interests[user_id] = []
     await context.bot.send_message(
         user_id,
         "Выберите ваши интересы (можно несколько), чтобы найти более подходящего собеседника:",
@@ -237,7 +227,6 @@ async def start_search(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None
     """Запускает поиск собеседника."""
     waiting_users.append(user_id)
     
-    # Установка таймаута на поиск
     job = context.application.job_queue.run_once(
         search_timeout_callback,
         120,
@@ -255,7 +244,6 @@ async def find_partner(context: ContextTypes.DEFAULT_TYPE) -> None:
         user1_id = waiting_users.pop(0)
         user2_id = waiting_users.pop(0)
 
-        # Отменяем таймауты
         if user1_id in search_timeouts:
             search_timeouts.pop(user1_id).job.schedule_removal()
         if user2_id in search_timeouts:
@@ -265,7 +253,6 @@ async def find_partner(context: ContextTypes.DEFAULT_TYPE) -> None:
         active_chats[user2_id] = user1_id
         show_name_requests[tuple(sorted((user1_id, user2_id)))] = {user1_id: None, user2_id: None}
         
-        # Уведомляем пользователей о начале чата и показываем меню чата
         await show_chat_menu(user1_id, context)
         await show_chat_menu(user2_id, context)
         
@@ -336,7 +323,8 @@ async def handle_show_name_request(user_id: int, context: ContextTypes.DEFAULT_T
     if partner_agree is None:
         await context.bot.send_message(user_id, "⏳ Ожидаем решение собеседника.")
     elif agree and partner_agree:
-        name1 = f"@{update.effective_user.username}" if update.effective_user.username else 'Без ника'
+        user = await context.bot.get_chat(user_id)
+        name1 = f"@{user.username}" if user.username else 'Без ника'
         name2_user = await context.bot.get_chat(partner_id)
         name2 = f"@{name2_user.username}" if name2_user.username else 'Без ника'
 
@@ -370,17 +358,22 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("🔐 Введите пароль для доступа к админ-панели:")
         context.user_data['awaiting_admin_password'] = True
 
-
-async def password_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает введённый админ-пароль."""
-    user_id = update.effective_user.id
-    if update.message.text.strip() == ADMIN_PASSWORD:
-        ADMIN_IDS.add(user_id)
-        await update.message.reply_text("✅ Пароль верный. Добро пожаловать в админ-панель.")
-        await show_admin_menu(user_id, context)
+# Новый обработчик для пароля
+async def password_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Проверяет пароль, если пользователь его ожидает."""
+    if context.user_data.get('awaiting_admin_password'):
+        user_id = update.effective_user.id
+        if update.message.text.strip() == ADMIN_PASSWORD:
+            ADMIN_IDS.add(user_id)
+            await update.message.reply_text("✅ Пароль верный. Добро пожаловать в админ-панель.")
+            await show_admin_menu(user_id, context)
+        else:
+            await update.message.reply_text("❌ Неверный пароль.")
+        del context.user_data['awaiting_admin_password']
     else:
-        await update.message.reply_text("❌ Неверный пароль.")
-    del context.user_data['awaiting_admin_password']
+        # Если пользователь не ожидал пароль, но написал что-то,
+        # обрабатываем это как обычное сообщение.
+        await message_handler(update, context)
 
 
 async def show_admin_menu(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -399,7 +392,6 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     text = update.message.text
     
-    # Логика ожидания ID для бана/разбана
     if "awaiting_ban_id" in context.user_data:
         try:
             target_id = int(text)
@@ -426,7 +418,6 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             del context.user_data["awaiting_unban_id"]
         return
 
-    # Обработка команд админ-меню
     if text == "📊 Статистика":
         await update.message.reply_text(
             f"👥 Пользователей согласилось: {len([u for u in user_agreements.values() if u])}\n"
@@ -462,15 +453,17 @@ def main() -> None:
     # Обработчики
     app.add_handler(CommandHandler('start', start_command))
     app.add_handler(CommandHandler('admin', admin_command))
-    
-    # Обработчик сообщений для админа (для пароля)
-    app.add_handler(MessageHandler(filters.TEXT & filters.User(user_data={'awaiting_admin_password': True}), password_handler))
+
+    # Изменённый порядок, чтобы сначала обработать пароль
+    # Обычный MessageHandler, который проверяет user_data внутри функции
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), password_check_handler))
     
     # Обработчик админ-команд (для тех, кто уже в админке)
-    app.add_handler(MessageHandler(filters.TEXT & filters.User(user_id=list(ADMIN_IDS)), admin_menu_handler))
-
+    # Этот фильтр нужно обновлять, так как ADMIN_IDS - это динамический set
+    # app.add_handler(MessageHandler(filters.TEXT & filters.User(user_id=list(ADMIN_IDS)), admin_menu_handler))
+    # Для решения этой проблемы, мы можем проверять, является ли пользователь админом внутри обработчика
+    
     app.add_handler(CallbackQueryHandler(handle_callback_query))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND) & ~filters.User(user_data={'awaiting_admin_password': True}), message_handler))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
     
     app.add_error_handler(error_handler)
