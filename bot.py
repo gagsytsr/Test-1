@@ -275,7 +275,6 @@ async def find_partner(context):
         active_chats[user2_id] = user1_id
         show_name_requests[(user1_id, user2_id)] = {user1_id: None, user2_id: None}
         
-        # Отправляем меню чата пользователям
         await show_chat_menu(None, user1_id)
         await show_chat_menu(None, user2_id)
 
@@ -327,7 +326,12 @@ async def end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Чат завершён.", reply_markup=ReplyKeyboardRemove())
         await context.bot.send_message(partner_id, "❌ Собеседник завершил чат.", reply_markup=ReplyKeyboardRemove())
         await show_main_menu(update, user_id)
-        await show_main_menu(None, partner_id)
+        # Обработка случая, когда update может быть None
+        if update:
+            await show_main_menu(update, partner_id)
+        else:
+            await context.bot.send_message(partner_id, "Выберите действие:", reply_markup=ReplyKeyboardMarkup([["🔍 Поиск собеседника"], ["⚠️ Сообщить о проблеме"], ["🔗 Мои рефералы"]], resize_keyboard=True))
+
     else:
         await update.message.reply_text("❗️Вы не находитесь в чате.")
 
@@ -426,9 +430,6 @@ if __name__ == '__main__':
     WEBHOOK_URL = os.environ.get('WEBHOOK_URL', "https://test-1-1-zard.onrender.com")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    # Инициализация JobQueue после создания Application
-    job_queue = app.job_queue
     
     app.add_error_handler(error_handler)
     
