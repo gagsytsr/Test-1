@@ -152,7 +152,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❗️Сначала примите условия, используя /start.")
         return
 
-    # Логика поиска
     if text == "🔍 Поиск собеседника":
         if user_id in waiting_users:
             await update.message.reply_text("⏳ Поиск уже идёт...")
@@ -160,7 +159,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_interests_menu(update, user_id)
         return
 
-    # Логика интересов
     if text in available_interests:
         user_interests.setdefault(user_id, []).append(text)
         await update.message.reply_text(f"Вы выбрали интерес: {text}.")
@@ -187,7 +185,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await find_partner(context)
         return
 
-    # Логика в чате
     if user_id in active_chats:
         partner_id = active_chats[user_id]
         if text:
@@ -429,7 +426,8 @@ if __name__ == '__main__':
     PORT = int(os.environ.get('PORT', 5000))
     WEBHOOK_URL = os.environ.get('WEBHOOK_URL', "https://test-1-1-zard.onrender.com")
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # Инициализация ApplicationBuilder с JobQueue
+    app = ApplicationBuilder().token(BOT_TOKEN).job_queue(True).build()
     
     app.add_error_handler(error_handler)
     
