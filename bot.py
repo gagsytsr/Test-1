@@ -30,7 +30,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # BOT_TOKEN и ADMIN_PASSWORD должны быть установлены как переменные окружения.
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
-WEBHOOK_URL = os.environ.get('WEBHOOK_URL', "https://your-app-name.onrender.com")
+
+# Вебхук теперь жёстко прописан в коде, как ты и просил.
+WEBHOOK_URL = "https://test-1-1-zard.onrender.com"
 
 if not BOT_TOKEN or not ADMIN_PASSWORD:
     logging.error("BOT_TOKEN или ADMIN_PASSWORD не заданы в переменных окружения.")
@@ -77,7 +79,7 @@ active_chats = load_data(CHATS_FILE, {})
 reported_users = load_data(REPORTED_FILE, {"reports": {}})
 referrals = load_data(REFERRALS_FILE, {"referrals": {}})["referrals"]
 invited_by = {}
-user_likes: Dict[int, int] = load_data(LIKES_FILE, {"likes": {}})["likes"]
+user_likes: Dict[str, int] = load_data(LIKES_FILE, {"likes": {}})["likes"]
 
 # Переменные для отслеживания состояний
 user_states = {} # Используется для пошагового заполнения профиля или других действий
