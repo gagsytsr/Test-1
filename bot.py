@@ -80,6 +80,7 @@ reported_users = load_data(REPORTED_FILE, {"reports": {}})
 referrals = load_data(REFERRALS_FILE, {"referrals": {}})["referrals"]
 invited_by = {}
 user_likes: Dict[str, int] = load_data(LIKES_FILE, {"likes": {}})["likes"]
+search_timers: Dict[str, asyncio.Task] = {}
 
 user_states = {}
 
@@ -331,22 +332,15 @@ async def show_interests_menu(user_id: str, context: ContextTypes.DEFAULT_TYPE) 
 
 async def start_search(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Запускает поиск собеседника."""
-    # Убеждаемся, что пользователь ещё не в поиске
     if user_id in waiting_users:
         return
         
     waiting_users.append(user_id)
     await show_search_menu(user_id, context)
     
-    job = context.application.job_queue.run_once(
-        search_timeout_callback,
-        120, # Тайм-аут 2 минуты
-        chat_id=int(user_id),
-        name=user_id
-    )
-    search_timeouts[user_id] = job
+    # Создаем асинхронную задачу для отмены поиска по таймауту
+    search_timers[user_id] = asyncio.create_task(cancel_search_after_timeout(user_id, context))
     
-    # Сразу запускаем проверку, чтобы найти пару, если есть
     await find_partner(context)
 
 
@@ -356,10 +350,13 @@ async def find_partner(context: ContextTypes.DEFAULT_TYPE) -> None:
         user1_id = waiting_users.pop(0)
         user2_id = waiting_users.pop(0)
 
-        if user1_id in search_timeouts:
-            search_timeouts.pop(user1_id).job.schedule_removal()
-        if user2_id in search_timeouts:
-            search_timeouts.pop(user2_id).job.schedule_removal()
+        # Отменяем таймаут для обоих пользователей, так как собеседник найден
+        if user1_id in search_timers:
+            search_timers[user1_id].cancel()
+            search_timers.pop(user1_id, None)
+        if user2_id in search_timers:
+            search_timers[user2_id].cancel()
+            search_timers.pop(user2_id, None)
             
         active_chats[user1_id] = user2_id
         active_chats[user2_id] = user1_id
@@ -370,12 +367,12 @@ async def find_partner(context: ContextTypes.DEFAULT_TYPE) -> None:
         await show_chat_menu(user1_id, context)
         await show_chat_menu(user2_id, context)
         
-async def search_timeout_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает истечение времени поиска."""
-    user_id = str(context.job.chat_id)
+async def cancel_search_after_timeout(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Автоматически отменяет поиск через 2 минуты."""
+    await asyncio.sleep(120)
     if user_id in waiting_users:
         waiting_users.remove(user_id)
-        search_timeouts.pop(user_id, None)
+        search_timers.pop(user_id, None)
         await context.bot.send_message(
             user_id,
             "⏳ Время поиска истекло. Попробуйте ещё раз.",
@@ -384,11 +381,12 @@ async def search_timeout_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
         await show_main_menu(user_id, context)
 
 async def cancel_search(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отменяет поиск собеседника."""
+    """Отменяет поиск собеседника вручную."""
     if user_id in waiting_users:
         waiting_users.remove(user_id)
-        if user_id in search_timeouts:
-            search_timeouts.pop(user_id).job.schedule_removal()
+        if user_id in search_timers:
+            search_timers[user_id].cancel()
+            search_timers.pop(user_id, None)
         await context.bot.send_message(user_id, "❌ Поиск отменён.", reply_markup=ReplyKeyboardRemove())
         await show_main_menu(user_id, context)
     else:
@@ -404,8 +402,8 @@ async def end_chat(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_key = tuple(sorted((user_id, partner_id)))
         show_name_requests.pop(chat_key, None)
         
-        await context.bot.send_message(user_id, "❌ Чат завершён.")
-        await context.bot.send_message(partner_id, "❌ Собеседник завершил чат.")
+        await context.bot.send_message(user_id, "❌ Чат завершён.", reply_markup=ReplyKeyboardRemove())
+        await context.bot.send_message(partner_id, "❌ Собеседник завершил чат.", reply_markup=ReplyKeyboardRemove())
         
         await show_main_menu(user_id, context)
         await show_main_menu(partner_id, context)
@@ -445,6 +443,9 @@ async def handle_show_name_request(user_id: str, context: ContextTypes.DEFAULT_T
     partner_id = active_chats[user_id]
     chat_key = tuple(sorted((user_id, partner_id)))
 
+    if chat_key not in show_name_requests:
+        show_name_requests[chat_key] = {user_id: None, partner_id: None}
+    
     show_name_requests[chat_key][user_id] = agree
     partner_agree = show_name_requests[chat_key][partner_id]
 
