@@ -44,7 +44,6 @@ class NotAdminFilter(BaseFilter):
 not_admin_filter = NotAdminFilter()
 
 # ========== ОБРАБОТЧИК ОШИБОК ==========
-# Улучшенный обработчик ошибок
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error(msg="Исключение при обработке обновления:", exc_info=context.error)
     if update and update.effective_chat:
@@ -92,7 +91,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = query.data
         user_id = query.from_user.id
         
-        # Логирование данных callback-запроса
         logging.info(f"Получен callback от пользователя {user_id}: {data}")
 
         if data == "agree":
@@ -102,7 +100,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             user_agreements[user_id] = True
             await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
-            await show_main_menu(update, user_id)
+            await show_main_menu(user_id, context) # ИЗМЕНЕНИЕ: вызываем show_main_menu
+            
         elif data.startswith("interest_"):
             interest = data.replace("interest_", "")
             if interest in user_interests.get(user_id, []):
@@ -116,8 +115,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 keyboard.append([InlineKeyboardButton(text, callback_data=f"interest_{interest}")])
             keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
             await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+            
         elif data == "interests_done":
-            await query.edit_message_text(f"✅ Ваши интересы: {', '.join(user_interests.get(user_id, [])) or 'Не выбраны'}.\nИщем собеседника...")
+            await query.edit_message_text(f"✅ Ваши интересы: {', '.join(user_interests.get(user_id, [])) or 'Не выбраны'}.\nИщем собеседника...", reply_markup=ReplyKeyboardRemove())
             waiting_users.append(user_id)
             
             job = context.application.job_queue.run_once(
@@ -129,6 +129,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             search_timeouts[user_id] = job
             
             await find_partner(context)
+            
         else:
             logging.warning(f"Unknown callback data: {data}")
     except Exception as e:
@@ -138,13 +139,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-async def show_main_menu(update, user_id):
+# ОБНОВЛЕННАЯ ФУНКЦИЯ show_main_menu
+async def show_main_menu(user_id, context):
     keyboard = [["🔍 Поиск собеседника"], ["⚠️ Сообщить о проблеме"], ["🔗 Мои рефералы"]]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    if update:
-        await update.effective_chat.send_message("Выберите действие:", reply_markup=markup)
-    else:
-        await app.bot.send_message(user_id, "Выберите действие:", reply_markup=markup)
+    text = "Выберите действие:"
+    
+    await context.bot.send_message(user_id, text, reply_markup=markup)
+
 
 async def referrals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -176,7 +178,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_menu_handler(update, context)
         return
 
-    if user_id in active_chats:
+    if user_id in active_chats and text:
         partner_id = active_chats[user_id]
         await context.bot.send_message(partner_id, text)
         return
@@ -214,7 +216,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_show_name_request(user_id, context, agree=False)
     elif text == "🔗 Мои рефералы":
         await referrals_command(update, context)
-    else:
+    elif text:
         await update.message.reply_text("❓ Неизвестная команда.")
 
 async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,7 +274,7 @@ async def search_timeout_callback(context: ContextTypes.DEFAULT_TYPE):
             "⏳ Время поиска истекло. Попробуйте ещё раз.",
             reply_markup=ReplyKeyboardRemove()
         )
-        await show_main_menu(None, user_id)
+        await show_main_menu(user_id, context)
 
 async def handle_show_name_request(user_id, context, agree):
     if user_id not in active_chats:
@@ -350,6 +352,10 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     text = update.message.text
+    
+    if not text:
+        logging.warning("Получено пустое текстовое сообщение в admin_menu_handler.")
+        return
     
     if "awaiting_ban_id" in context.user_data:
         try:
