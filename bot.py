@@ -76,22 +76,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Администрация не несет ответственности за контент пользователей.\n\n"
         "Нажмите 'Согласен' чтобы начать."
     )
-    keyboard = [[KeyboardButton("✅ Согласен")]]
-    await update.message.reply_text(agreement_text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    keyboard = [[InlineKeyboardButton("✅ Согласен", callback_data="agree")]]
+    await update.message.reply_text(agreement_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def agree_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if update.message.text == "✅ Согласен":
-        if user_id in banned_users:
-            await update.message.reply_text("❌ Вы заблокированы и не можете использовать бота.", reply_markup=ReplyKeyboardRemove())
-            return
+async def agree_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    if user_id in banned_users:
+        await query.edit_message_text("❌ Вы заблокированы и не можете использовать бота.")
+        return
         
-        user_agreements[user_id] = True
-        await update.message.reply_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.", reply_markup=ReplyKeyboardRemove())
-        await show_main_menu(update, user_id)
-    else:
-        if not user_agreements.get(user_id, False):
-            await update.message.reply_text("❗️Сначала примите условия, используя кнопку 'Согласен'.")
+    user_agreements[user_id] = True
+    await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
+    await show_main_menu(update, user_id)
 
 async def show_main_menu(update, user_id):
     keyboard = [["🔍 Поиск собеседника"], ["⚠️ Сообщить о проблеме"], ["🔗 Мои рефералы"]]
@@ -186,7 +184,6 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif update.message.sticker:
             await context.bot.send_sticker(partner_id, sticker=update.message.sticker.file_id)
 
-# Функции для поиска по интересам с Inline-кнопками
 async def show_interests_menu(update, user_id):
     keyboard = [[InlineKeyboardButton(interest, callback_data=f"interest_{interest}")] for interest in available_interests]
     keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
@@ -403,14 +400,15 @@ if __name__ == '__main__':
     # 1. CallbackQueryHandler (для inline-кнопок)
     # 2. CommandHandler (для команд /start, /admin)
     # 3. MessageHandler (для текстовых и медиа-сообщений)
-
+    app.add_handler(CallbackQueryHandler(agree_callback, pattern='^agree$'))
     app.add_handler(CallbackQueryHandler(interests_callback, pattern='^interest_'))
     
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('admin', admin_command))
 
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^✅ Согласен$"), agree_button_handler))
-    
+    # Обработчик кнопок меню админа
+    app.add_handler(MessageHandler(filters.TEXT & filters.User(lambda user: user.id in ADMIN_IDS), admin_menu_handler))
+
     # Основной обработчик текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
