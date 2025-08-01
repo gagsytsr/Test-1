@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.ext.filters import BaseFilter
 import asyncio
@@ -11,7 +11,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
 
 # ========== ПЕРЕМЕННЫЕ ==========
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -29,8 +28,11 @@ user_agreements = {}
 banned_users = set()
 reported_users = {}
 search_timeouts = {}
+
+# Новые переменные для поиска по интересам
 user_interests = {}
 available_interests = ["Музыка", "Игры", "Кино", "Путешествия", "Спорт", "Книги"]
+
 referrals = {}
 invited_by = {}
 
@@ -42,8 +44,12 @@ class NotAdminFilter(BaseFilter):
 not_admin_filter = NotAdminFilter()
 
 # ========== ОБРАБОТЧИК ОШИБОК ==========
+# Улучшенный обработчик ошибок
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logging.error("Исключение в обработчике: %s", context.error, exc_info=True)
+    logging.error(msg="Исключение при обработке обновления:", exc_info=context.error)
+    if update and update.effective_chat:
+        logging.error(f"Обновление {update} вызвало ошибку {context.error} в чате {update.effective_chat.id}")
+
 
 # ========== СТАРТ И СОГЛАСИЕ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -61,9 +67,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 referrals[referrer_id] += 1
                 invited_by[user_id] = referrer_id
                 await context.bot.send_message(referrer_id, f"🎉 По вашей ссылке зарегистрировался новый пользователь!")
-                logger.info(f"User {user_id} was invited by {referrer_id}")
+                logging.info(f"User {user_id} was invited by {referrer_id}")
         except (ValueError, IndexError):
-            logger.error("Неверный формат реферальной ссылки.")
+            logging.error("Неверный формат реферальной ссылки.")
 
     user_agreements[user_id] = False
     agreement_text = (
@@ -71,40 +77,74 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ Перед использованием подтвердите согласие с правилами:\n"
         "• Запрещено нарушать законы.\n"
         "• Соблюдайте уважение.\n"
-        "• Администрация не несет ответственность за контент пользователей.\n\n"
+        "• Администрация не несет ответственности за контент пользователей.\n\n"
         "Нажмите 'Согласен' чтобы начать."
     )
     keyboard = [[InlineKeyboardButton("✅ Согласен", callback_data="agree")]]
     await update.message.reply_text(agreement_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
+# ОБНОВЛЕННЫЙ ЕДИНЫЙ ОБРАБОТЧИК CALLBACK-ЗАПРОСОВ
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-    data = query.data
-    logger.info(f"Received callback: {data} from {query.from_user.id}")
     
-    if data == "agree":
-        await agree_callback(update, context)
-    elif data.startswith("interest_") or data == "interests_done":
-        await interests_callback(update, context)
-    else:
-        logger.warning(f"Unknown callback data: {data}")
-
-async def agree_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    if user_id in banned_users:
-        await query.edit_message_text("❌ Вы заблокированы и не можете использовать бота.")
-        return
+    try:
+        await query.answer()
+        data = query.data
+        user_id = query.from_user.id
         
-    user_agreements[user_id] = True
-    await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
-    await show_main_menu(context, user_id)
+        # Логирование данных callback-запроса
+        logging.info(f"Получен callback от пользователя {user_id}: {data}")
 
-async def show_main_menu(context, user_id):
+        if data == "agree":
+            if user_id in banned_users:
+                await query.edit_message_text("❌ Вы заблокированы и не можете использовать бота.")
+                return
+                
+            user_agreements[user_id] = True
+            await query.edit_message_text("✅ Вы согласились с условиями. Теперь можете искать собеседника.")
+            await show_main_menu(update, user_id)
+        elif data.startswith("interest_"):
+            interest = data.replace("interest_", "")
+            if interest in user_interests.get(user_id, []):
+                user_interests[user_id].remove(interest)
+            else:
+                user_interests.setdefault(user_id, []).append(interest)
+            
+            keyboard = []
+            for interest in available_interests:
+                text = f"✅ {interest}" if interest in user_interests.get(user_id, []) else interest
+                keyboard.append([InlineKeyboardButton(text, callback_data=f"interest_{interest}")])
+            keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "interests_done":
+            await query.edit_message_text(f"✅ Ваши интересы: {', '.join(user_interests.get(user_id, [])) or 'Не выбраны'}.\nИщем собеседника...")
+            waiting_users.append(user_id)
+            
+            job = context.application.job_queue.run_once(
+                search_timeout_callback,
+                120,
+                chat_id=user_id,
+                name=str(user_id)
+            )
+            search_timeouts[user_id] = job
+            
+            await find_partner(context)
+        else:
+            logging.warning(f"Unknown callback data: {data}")
+    except Exception as e:
+        logging.error(f"Ошибка в handle_callback: {e}")
+        try:
+            await query.answer(text="Произошла ошибка!", show_alert=True)
+        except:
+            pass
+
+async def show_main_menu(update, user_id):
     keyboard = [["🔍 Поиск собеседника"], ["⚠️ Сообщить о проблеме"], ["🔗 Мои рефералы"]]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await context.bot.send_message(user_id, "Выберите действие:", reply_markup=markup)
+    if update:
+        await update.effective_chat.send_message("Выберите действие:", reply_markup=markup)
+    else:
+        await app.bot.send_message(user_id, "Выберите действие:", reply_markup=markup)
 
 async def referrals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -116,21 +156,13 @@ async def referrals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-# ========== ОБРАБОТЧИК СООБЩЕНИЙ ==========
+# ========== ПОИСК И ЧАТ ==========
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
-    logger.info(f"Message from {user_id}: {text}")
     
-    # Обработка пароля администратора
     if context.user_data.get('awaiting_admin_password'):
-        if text.strip() == ADMIN_PASSWORD:
-            ADMIN_IDS.add(user_id)
-            await update.message.reply_text("✅ Пароль верный. Добро пожаловать в админ-панель.", reply_markup=ReplyKeyboardRemove())
-            await show_admin_menu(update, context)
-        else:
-            await update.message.reply_text("❌ Неверный пароль. Попробуйте снова.")
-        context.user_data['awaiting_admin_password'] = False
+        await password_handler(update, context)
         return
 
     if user_id in banned_users:
@@ -146,9 +178,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id in active_chats:
         partner_id = active_chats[user_id]
-        # Отправляем текст только если он не пустой
-        if text:
-            await context.bot.send_message(partner_id, text)
+        await context.bot.send_message(partner_id, text)
         return
 
     if text == "🔍 Поиск собеседника" or text == "🔍 Начать новый чат":
@@ -156,7 +186,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⏳ Поиск уже идёт...")
             return
         
-        await show_interests_menu(context, user_id)
+        await show_interests_menu(update, user_id)
         
     elif text == "⚠️ Сообщить о проблеме":
         if user_id in active_chats:
@@ -187,99 +217,50 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❓ Неизвестная команда.")
 
-# ИСПРАВЛЕННАЯ ФУНКЦИЯ ОБРАБОТКИ МЕДИА
 async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in active_chats:
         partner_id = active_chats[user_id]
         
-        # Для каждого типа медиа проверяем наличие caption
         if update.message.photo:
-            # Если есть подпись - отправляем с подписью, иначе без
-            if update.message.caption:
-                await context.bot.send_photo(partner_id, photo=update.message.photo[-1].file_id, caption=update.message.caption)
-            else:
-                await context.bot.send_photo(partner_id, photo=update.message.photo[-1].file_id)
-                
+            await context.bot.send_photo(partner_id, photo=update.message.photo[-1].file_id, caption=update.message.caption)
         elif update.message.video:
-            if update.message.caption:
-                await context.bot.send_video(partner_id, video=update.message.video.file_id, caption=update.message.caption)
-            else:
-                await context.bot.send_video(partner_id, video=update.message.video.file_id)
-                
+            await context.bot.send_video(partner_id, video=update.message.video.file_id, caption=update.message.caption)
         elif update.message.voice:
-            if update.message.caption:
-                await context.bot.send_voice(partner_id, voice=update.message.voice.file_id, caption=update.message.caption)
-            else:
-                await context.bot.send_voice(partner_id, voice=update.message.voice.file_id)
-                
+            await context.bot.send_voice(partner_id, voice=update.message.voice.file_id, caption=update.message.caption)
         elif update.message.sticker:
-            # Для стикеров caption не используется
             await context.bot.send_sticker(partner_id, sticker=update.message.sticker.file_id)
 
-async def show_interests_menu(context, user_id):
+async def show_interests_menu(update, user_id):
     keyboard = [[InlineKeyboardButton(interest, callback_data=f"interest_{interest}")] for interest in available_interests]
     keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(
-        user_id,
+    await update.message.reply_text(
         "Выберите ваши интересы (можно несколько), чтобы найти более подходящего собеседника:",
         reply_markup=reply_markup
     )
     user_interests[user_id] = []
 
-async def interests_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    
-    if query.data.startswith("interest_"):
-        interest = query.data.replace("interest_", "")
-        if interest in user_interests.get(user_id, []):
-            user_interests[user_id].remove(interest)
-        else:
-            user_interests.setdefault(user_id, []).append(interest)
-        
-        keyboard = []
-        for interest in available_interests:
-            text = f"✅ {interest}" if interest in user_interests.get(user_id, []) else interest
-            keyboard.append([InlineKeyboardButton(text, callback_data=f"interest_{interest}")])
-        keyboard.append([InlineKeyboardButton("➡️ Готово", callback_data="interests_done")])
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
-        
-    elif query.data == "interests_done":
-        await query.edit_message_text(f"✅ Ваши интересы: {', '.join(user_interests.get(user_id, [])) or 'Не выбраны'}.\nИщем собеседника...")
-        waiting_users.append(user_id)
-        
-        job = context.application.job_queue.run_once(
-            search_timeout_callback,
-            120,
-            chat_id=user_id,
-            name=str(user_id)
-        )
-        search_timeouts[user_id] = job
-        
-        await find_partner(context)
-
 async def find_partner(context):
     if len(waiting_users) >= 2:
-        user1 = waiting_users.pop(0)
-        user2 = waiting_users.pop(0)
+        user1_id = waiting_users.pop(0)
+        user2_id = waiting_users.pop(0)
 
-        if user1 in search_timeouts:
-            search_timeouts.pop(user1).job.schedule_removal()
-        if user2 in search_timeouts:
-            search_timeouts.pop(user2).job.schedule_removal()
+        if user1_id in search_timeouts:
+            search_timeouts.pop(user1_id).job.schedule_removal()
+        if user2_id in search_timeouts:
+            search_timeouts.pop(user2_id).job.schedule_removal()
             
-        active_chats[user1] = user2
-        active_chats[user2] = user1
-        show_name_requests[(user1, user2)] = {user1: None, user2: None}
+        active_chats[user1_id] = user2_id
+        active_chats[user2_id] = user1_id
+        show_name_requests[(user1_id, user2_id)] = {user1_id: None, user2_id: None}
 
         markup = ReplyKeyboardMarkup(
             [["🚫 Завершить чат", "🔍 Начать новый чат"], ["👤 Показать мой ник", "🙈 Не показывать ник"]],
             resize_keyboard=True
         )
-        await context.bot.send_message(user1, "👤 Собеседник найден! Общайтесь.", reply_markup=markup)
-        await context.bot.send_message(user2, "👤 Собеседник найден! Общайтесь.", reply_markup=markup)
+        await context.bot.send_message(user1_id, "👤 Собеседник найден! Общайтесь.", reply_markup=markup)
+        await context.bot.send_message(user2_id, "👤 Собеседник найден! Общайтесь.", reply_markup=markup)
 
 async def search_timeout_callback(context: ContextTypes.DEFAULT_TYPE):
     user_id = context.job.chat_id
@@ -291,7 +272,7 @@ async def search_timeout_callback(context: ContextTypes.DEFAULT_TYPE):
             "⏳ Время поиска истекло. Попробуйте ещё раз.",
             reply_markup=ReplyKeyboardRemove()
         )
-        await show_main_menu(context, user_id)
+        await show_main_menu(None, user_id)
 
 async def handle_show_name_request(user_id, context, agree):
     if user_id not in active_chats:
@@ -322,8 +303,7 @@ async def handle_show_name_request(user_id, context, agree):
 async def end_chat(user_id, context):
     if user_id in active_chats:
         partner_id = active_chats.pop(user_id)
-        if partner_id in active_chats:
-            active_chats.pop(partner_id)
+        active_chats.pop(partner_id, None)
         
         chat_key = tuple(sorted((user_id, partner_id)))
         show_name_requests.pop(chat_key, None)
@@ -340,12 +320,22 @@ async def end_chat(user_id, context):
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in ADMIN_IDS:
-        await show_admin_menu(update, context)
+        await show_admin_menu(update)
     else:
         await update.message.reply_text("🔐 Введите пароль для доступа к админ-панели:")
         context.user_data['awaiting_admin_password'] = True
 
-async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def password_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get('awaiting_admin_password'):
+        if update.message.text.strip() == ADMIN_PASSWORD:
+            ADMIN_IDS.add(update.effective_user.id)
+            await update.message.reply_text("✅ Пароль верный. Добро пожаловать в админ-панель.", reply_markup=ReplyKeyboardRemove())
+            await show_admin_menu(update)
+        else:
+            await update.message.reply_text("❌ Неверный пароль.")
+        context.user_data['awaiting_admin_password'] = False
+
+async def show_admin_menu(update: Update):
     keyboard = [
         ["📊 Статистика", "♻️ Завершить все чаты"],
         ["👮‍♂️ Забанить", "🔓 Разбанить"],
@@ -413,32 +403,27 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
-    PORT = int(os.environ.get('PORT', 10000))
-    WEBHOOK_URL = "https://test-1-1-zard.onrender.com"
-    logger.info(f"Starting bot on port {PORT} with webhook {WEBHOOK_URL}")
+    PORT = int(os.environ.get('PORT', 5000))
+    WEBHOOK_URL = os.environ.get('WEBHOOK_URL', "https://test-1-1-zard.onrender.com")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     app.add_error_handler(error_handler)
     
-    # Обработчики колбэков
+    # Обработчик CallbackQueryHandler, который направляет запросы в единую функцию
     app.add_handler(CallbackQueryHandler(handle_callback))
     
-    # Командные обработчики
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('admin', admin_command))
-    app.add_handler(CommandHandler('referrals', referrals_command))
-    
-    # Текстовые обработчики
+
+    # Исправленная строка
+    app.add_handler(MessageHandler(filters.TEXT & filters.User(user_ids=ADMIN_IDS), admin_menu_handler))
+
+    # Основной обработчик текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
-    # Обработчики медиа
+    # Обработчик медиафайлов
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
 
-    # Запуск вебхука
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-        url_path=BOT_TOKEN
-    )
+    # Запускаем бота в режиме вебхуков
+    app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
