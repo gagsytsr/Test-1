@@ -156,9 +156,9 @@ async def show_search_menu(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> 
 async def show_chat_menu(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает меню чата пользователю."""
     keyboard = [
-        ["🚫 Завершить чат", "🔍 Начать новый чат"],
+        ["🚫 Завершить чат"], 
         ["👤 Показать мой ник", "❤️ Отправить лайк"],
-        ["🙈 Не показывать ник"]
+        ["🙈 Не показывать ник", "⚠️ Пожаловаться на собеседника"]
     ]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await context.bot.send_message(user_id, "Вы в чате. Общайтесь.", reply_markup=markup)
@@ -253,6 +253,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif text == "⚠️ Сообщить о проблеме":
         await report_issue(user_id, update.effective_user.username, context)
 
+    elif text == "⚠️ Пожаловаться на собеседника":
+        await report_partner(user_id, update.effective_user.username, context)
+
     elif text == "🚫 Завершить чат" or text == "🔍 Начать новый чат":
         await end_chat(user_id, context)
         
@@ -338,7 +341,6 @@ async def start_search(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None
     waiting_users.append(user_id)
     await show_search_menu(user_id, context)
     
-    # Создаем асинхронную задачу для отмены поиска по таймауту
     search_timers[user_id] = asyncio.create_task(cancel_search_after_timeout(user_id, context))
     
     await find_partner(context)
@@ -350,7 +352,6 @@ async def find_partner(context: ContextTypes.DEFAULT_TYPE) -> None:
         user1_id = waiting_users.pop(0)
         user2_id = waiting_users.pop(0)
 
-        # Отменяем таймаут для обоих пользователей, так как собеседник найден
         if user1_id in search_timers:
             search_timers[user1_id].cancel()
             search_timers.pop(user1_id, None)
@@ -364,6 +365,27 @@ async def find_partner(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         show_name_requests[tuple(sorted((user1_id, user2_id)))] = {user1_id: None, user2_id: None}
         
+        profile1 = user_profiles.get(user1_id, {})
+        profile2 = user_profiles.get(user2_id, {})
+
+        info1 = (
+            f"**👤 Собеседник найден!**\n\n"
+            f"Пол: `{profile2.get('gender', 'Не указан')}`\n"
+            f"Возраст: `{profile2.get('age', 'Не указан')}`\n"
+            f"Город: `{profile2.get('city', 'Не указан')}`\n"
+            f"Лайков: `{user_likes.get(user2_id, 0)}`"
+        )
+        info2 = (
+            f"**👤 Собеседник найден!**\n\n"
+            f"Пол: `{profile1.get('gender', 'Не указан')}`\n"
+            f"Возраст: `{profile1.get('age', 'Не указан')}`\n"
+            f"Город: `{profile1.get('city', 'Не указан')}`\n"
+            f"Лайков: `{user_likes.get(user1_id, 0)}`"
+        )
+        
+        await context.bot.send_message(user1_id, info1, parse_mode='Markdown')
+        await context.bot.send_message(user2_id, info2, parse_mode='Markdown')
+
         await show_chat_menu(user1_id, context)
         await show_chat_menu(user2_id, context)
         
@@ -410,9 +432,8 @@ async def end_chat(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await context.bot.send_message(user_id, "❗️Вы не находитесь в чате.")
         
-
-async def report_issue(user_id: str, username: str, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет жалобу админам."""
+async def report_partner(user_id: str, username: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет жалобу админам на собеседника."""
     if user_id not in active_chats:
         await context.bot.send_message(user_id, "❗️ Вы не в чате, чтобы подать жалобу.")
         return
@@ -422,7 +443,8 @@ async def report_issue(user_id: str, username: str, context: ContextTypes.DEFAUL
     reported_users["reports"][partner_id].append({"reporter": user_id, "timestamp": time.time()})
     save_data(reported_users, REPORTED_FILE)
     
-    await context.bot.send_message(user_id, "⚠️ Спасибо за сообщение! Администрация проверит ситуацию.")
+    await context.bot.send_message(user_id, "⚠️ Спасибо за сообщение! Администрация проверит ситуацию. Чат завершён.", reply_markup=ReplyKeyboardRemove())
+    await end_chat(user_id, context)
     
     for admin_id in ADMIN_IDS:
         await context.bot.send_message(
