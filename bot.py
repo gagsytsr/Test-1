@@ -239,6 +239,7 @@ async def interests_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             120,
             chat_id=user_id,
             name=str(user_id)
+        )  # Исправлено: добавлена закрывающая скобка
         search_timeouts[user_id] = job
         
         await find_partner(context)
@@ -422,6 +423,6 @@ if __name__ == '__main__':
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url=f"{WEBHOOK_URL}",
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
         url_path=BOT_TOKEN
     )
