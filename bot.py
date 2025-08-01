@@ -1,5 +1,5 @@
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, JobQueue
 from telegram.ext.filters import BaseFilter
 import asyncio
 import logging
@@ -179,8 +179,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 name=str(user_id)
             )
             search_timeouts[user_id] = job
-        else:
-            logging.error("JobQueue не инициализирован. Таймаут поиска не будет работать.")
         
         await find_partner(context)
         return
@@ -323,12 +321,9 @@ async def end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Чат завершён.", reply_markup=ReplyKeyboardRemove())
         await context.bot.send_message(partner_id, "❌ Собеседник завершил чат.", reply_markup=ReplyKeyboardRemove())
         await show_main_menu(update, user_id)
-        # Обработка случая, когда update может быть None
-        if update:
-            await show_main_menu(update, partner_id)
-        else:
-            await context.bot.send_message(partner_id, "Выберите действие:", reply_markup=ReplyKeyboardMarkup([["🔍 Поиск собеседника"], ["⚠️ Сообщить о проблеме"], ["🔗 Мои рефералы"]], resize_keyboard=True))
-
+        
+        # Отправляем меню партнеру, если у нас есть его ID
+        await show_main_menu(None, partner_id)
     else:
         await update.message.reply_text("❗️Вы не находитесь в чате.")
 
@@ -426,8 +421,11 @@ if __name__ == '__main__':
     PORT = int(os.environ.get('PORT', 5000))
     WEBHOOK_URL = os.environ.get('WEBHOOK_URL', "https://test-1-1-zard.onrender.com")
 
-    # Инициализация ApplicationBuilder с JobQueue
-    app = ApplicationBuilder().token(BOT_TOKEN).job_queue(True).build()
+    # Создаем объект JobQueue
+    job_queue = JobQueue()
+    
+    # Инициализируем ApplicationBuilder, передавая job_queue
+    app = ApplicationBuilder().token(BOT_TOKEN).job_queue(job_queue).build()
     
     app.add_error_handler(error_handler)
     
@@ -438,4 +436,5 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Sticker.ALL, media_handler))
 
+    # Запускаем бота в режиме вебхуков
     app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
